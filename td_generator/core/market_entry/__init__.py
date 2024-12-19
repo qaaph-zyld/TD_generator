@@ -1,0 +1,1 @@
+"""Market Entry Gate implementation."""
