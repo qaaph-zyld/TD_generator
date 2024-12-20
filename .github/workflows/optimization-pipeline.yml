@@ -1,0 +1,173 @@
+name: Advanced Performance Monitoring
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+jobs:
+  performance-profiling:
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        profile-type: ['cpu', 'memory', 'io', 'network', 'thread']
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # For comparison with previous commit
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install py-spy memory_profiler line_profiler objgraph psutil
+
+      - name: Setup Performance Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-tools-common linux-tools-generic
+          sudo apt-get install -y valgrind kcachegrind
+
+      - name: Configure Perf Events
+        run: |
+          sudo sysctl -w kernel.perf_event_paranoid=-1
+          sudo sysctl -w kernel.kptr_restrict=0
+
+      - name: Run System Profiling
+        run: |
+          python -c "
+          from td_generator.core.optimization.system_optimizer import SystemOptimizer, ProfileType
+          import asyncio
+
+          async def profile_system():
+              optimizer = SystemOptimizer()
+              result = await optimizer.profile_system(ProfileType.${{ matrix.profile-type }})
+              print(f'Profiling completed: {result.id}')
+              print(f'Metrics: {result.metrics}')
+              print(f'Analysis: {result.analysis}')
+              print(f'Recommendations: {result.recommendations}')
+
+          asyncio.run(profile_system())
+          "
+
+      - name: Process Profiling Data
+        run: |
+          python .github/scripts/process_profile_data.py \
+            --type="${{ matrix.profile-type }}" \
+            --output="profile_data.json"
+
+      - name: Store Performance Data
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.profile-type }}-profile
+          path: profile_data.json
+
+  optimization-verification:
+    needs: performance-profiling
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-benchmark
+
+      - name: Download Profile Data
+        uses: actions/download-artifact@v3
+        with:
+          path: profile_data
+
+      - name: Run Optimization Suite
+        run: |
+          python -c "
+          from td_generator.core.optimization.system_optimizer import SystemOptimizer
+          import asyncio
+
+          async def optimize_system():
+              optimizer = SystemOptimizer()
+              
+              # Memory optimization
+              memory_profile = await optimizer.optimize_memory({
+                  'cache_optimization': {
+                      'data_alignment': {
+                          'struct_packing': 'minimal_padding',
+                          'cache_line_optimization': 64
+                      }
+                  }
+              })
+              print(f'Memory optimization completed: {memory_profile.id}')
+              
+              # Computation optimization
+              compute_profile = await optimizer.optimize_computation({
+                  'algorithm_optimization': True,
+                  'parallelization': True
+              })
+              print(f'Computation optimization completed: {compute_profile.id}')
+              
+              # Thread optimization
+              thread_profile = await optimizer.optimize_threading({
+                  'workload_distribution': {
+                      'task_partitioning': {
+                          'granularity_control': 'adaptive'
+                      }
+                  }
+              })
+              print(f'Thread optimization completed: {thread_profile.id}')
+
+          asyncio.run(optimize_system())
+          "
+
+      - name: Verify Optimizations
+        run: |
+          pytest tests/optimization/ \
+            --benchmark-only \
+            --benchmark-json benchmark.json
+
+      - name: Compare with Baseline
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'pytest'
+          output-file-path: benchmark.json
+          alert-threshold: '200%'
+          fail-on-alert: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  report-generation:
+    needs: optimization-verification
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Generate Report
+        run: |
+          python .github/scripts/generate_optimization_report.py \
+            --data-dir=artifacts \
+            --output=optimization_report.md
+
+      - name: Upload Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: optimization-report
+          path: optimization_report.md
